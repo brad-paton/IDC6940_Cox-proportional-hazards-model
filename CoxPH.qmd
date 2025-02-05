@@ -1,0 +1,264 @@
+---
+title: "CoxPropHazard"
+format: html
+editor: visual
+---
+
+### Example Model
+
+```{r}
+library(survival)
+data <- survival::colon
+head(data)
+```
+
+**Colon dataset summary**
+
+https://stat.ethz.ch/R-manual/R-devel/library/survival/html/colon.html
+
+|           |          |                                                                                   |
+|----------------|----------------|----------------------------------------|
+| Field     | DataType | Description                                                                       |
+| id:       | num      | id                                                                                |
+| study:    | num      | 1 for all patients                                                                |
+| rx:       | factor   | Treatment - Obs(ervation), Lev(amisole), Lev(amisole)+5-FU                        |
+| sex:      | num      | 1=male                                                                            |
+| age:      | num      | in years                                                                          |
+| obstruct: | num      | obstruction of colon by tumour                                                    |
+| perfor:   | num      | perforation of colon                                                              |
+| adhere:   | num      | adherence to nearby organs                                                        |
+| nodes:    | num      | number of lymph nodes with detectable cancer                                      |
+| time:     | num      | days until event or censoring                                                     |
+| status:   | num      | censoring status                                                                  |
+| differ:   | num      | differentiation of tumour (1=well, 2=moderate, 3=poor)                            |
+| extent:   | num      | Extent of local spread (1=submucosa, 2=muscle, 3=serosa, 4=contiguous structures) |
+| surg:     | num      | time from surgery to registration (0=short, 1=long)                               |
+| node4:    | num      | more than 4 positive lymph nodes                                                  |
+| etype:    | num      | event type: 1=recurrence,2=death                                                  |
+
+## Assumptions of Cox Proportional Hazards
+
+#### Proportional Hazards Assumption
+
+Hazard ratios should be constant over time.
+
+#### Linearity
+
+relationship between covariates and the log hazard is linear.
+
+#### Independence of Survival Times
+
+Each data point would need to be independent of each other.
+
+#### No Omitted Covariates
+
+All need to be included or the model will be biased
+
+#### Model Creation
+
+Surv(time, event) - Creates survival object with time and event
+
+variables after \~ are covariates
+
+```{r}
+cox <- coxph(Surv(time, status) ~ age + sex + node4,
+             data = data)
+
+summary(cox)
+```
+
+### Testing Assumptions
+
+#### Proportional Hazards Assumption
+
+```{r}
+cox.zph(cox)
+
+plot(cox.zph(cox))
+```
+
+Interpretation of output
+
+-   P value \<= .05 indicates the assumption is violated for that covariate.
+
+-   The visuals display Shoenfeld residuals over time for each covariate. If the residuals are in a straight line, the assumption is satisfied.
+
+-   If the line changes over time it may indicate the hazard ratio changes over time for the covariate
+
+-   No clear pattern in the plot indicates no pattern in the residuals. The plot is inconclusive and refer to the p value
+
+If the assumption is broken:
+
+-   Stratification - analyzing the data separately for different covariates that violate the assumption. Use strata() within coxph() when making the model
+
+-   Transformation - a transformation, such as log, can be applied to a covariate that breaks the assumption
+
+#### Linearity Test
+
+Tested by plotting Martingale Residuals against continuous covariates.
+
+```{r}
+martingale <- resid(cox, type = "martingale")
+
+#Create a plot for each covariate in the model
+par(mfrow = c(1,3))
+plot(data$age, martingale, main = "Martingale Residuals: age")
+abline(h = 0, col = "red")
+plot(data$sex, martingale, main = "Martingale Residuals: sex")
+abline(h = 0, col = "red")
+plot(data$nodes, martingale, main = "Martingale Residuals: nodes")
+abline(h = 0, col = "red")
+
+```
+
+-   Increasing or decreasing slope indicates a violation of the linearity assumption
+
+-   A horizontal band around 0 indicates the assumption is not violated
+
+-   Points close to zero indicate the model fits the observations well and vice versa for points far from zero
+
+-   More points above zero indicates the model is underestimating the hazard for a significant number of observations.
+
+    If this assumption is violated:
+
+-   For the covariate in question, square the term in the model
+
+-   Use splines for the covariate in question. From the splines library, use ns(covariate, df = \_ )
+
+-   If the variable is continuous, convert it into a categorical variable.
+
+### Evaluation
+
+#### C_index
+
+Concordant if the individual with a higher predicted risk experienced the event before the individual with the lower expected risk.
+
+Discordant if the individual with the higher predicted risk experiences the event after the individual with the lower predicted risk.
+
+Tied if the individuals experienced the event at the same time or did not experience the event in the period.
+
+The c index is between 0 and 1.
+
+1 means the model perfectly discriminates between individuals
+
+0 means the model is completely unable to discriminate between individuals.
+
+.5 means the model performs at random chance.
+
+Interpretation of c index. A c index of \_\_\_ means that the model correctly predicts the relative risk of \_\_\_ of the comparable pairs.
+
+$$
+C-index = \frac{Number of Concordant Pairs}{Pairs}
+$$
+
+```{r}
+#Get C index
+(c_index <- concordance(cox, newdata = data))
+```
+
+### Visualizations
+
+Survival curves are a common way to represent Cox models.
+
+#### Using the ggsurvplot Function to Create Survival Curve
+
+```{r}
+library(survminer)
+library(tidyverse)
+
+survfit <- survfit(cox)
+
+ggsurvplot(survfit,
+           data = data,
+           conf.int = TRUE,
+           palette = "Dark1",
+           pval = TRUE)
+```
+
+#### Using ggplot to Create Hazard Ratio 95% CI
+
+```{r}
+library(broom)
+
+model_summary <- tidy(cox)
+
+ggplot(model_summary,
+       aes(x = term, y = exp(estimate), 
+           ymin = exp(estimate-1.96*std.error),
+           ymax = exp(estimate+1.96*std.error)))+
+  geom_point()+
+  geom_errorbar(width = .2)+
+  scale_y_continuous(trans = "log")+
+  labs(x = "Covariates",
+       y = "Hazard Ratio (95% CI)",
+       title = "Hazard Ratios from Model")+theme_bw()
+  
+```
+
+### Predictions
+
+```{r}
+#Create training and testing sets
+
+set.seed(100)
+
+split <- sample(1:nrow(data), size = round(.9*nrow(data)))
+
+train <- data[split,]
+test <- data[-split,]
+```
+
+**Create Model for Training Data Set**
+
+```{r}
+m <- coxph(Surv(time, status) ~ strata(age) + sex + strata(obstruct) + perfor + surg,
+             data = train)
+
+summary(m)
+```
+
+#### **Check Assumptions**
+
+**Proportional Hazards**
+
+```{r}
+cox.zph(m)
+
+plot(cox.zph(m))
+```
+
+```{r}
+m_martingale <- resid(m, type = "martingale")
+
+#Create a plot for each covariate in the model
+par(mfrow = c(1,5))
+plot(train$age, m_martingale, main = "Martingale Residuals: age")
+abline(h = 0, col = "red")
+
+plot(train$sex, m_martingale, main = "Martingale Residuals: sex")
+abline(h = 0, col = "red")
+
+plot(train$obstruct, m_martingale, main = "Martingale Residuals: nodes")
+abline(h = 0, col = "red")
+
+plot(train$perfor, m_martingale, main = "Martingale Residuals: nodes")
+abline(h = 0, col = "red")
+
+plot(train$surg, m_martingale, main = "Martingale Residuals: nodes")
+abline(h = 0, col = "red")
+```
+
+```{r}
+(m_c_index <- concordance(cox, newdata = test))
+
+```
+
+```{r}
+test$loghazard <- predict(m, newdata = test,type = "risk")
+
+test$hazardratios <- exp(test$loghazard)
+
+head(select(test,loghazard,hazardratios,age,sex,obstruct,perfor,surg))
+```
+
+### 
